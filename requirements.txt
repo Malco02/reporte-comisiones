@@ -1,6 +1,6 @@
-pandas==2.2.2
+pandas==2.2.3
 sqlalchemy==2.0.30
 psycopg2-binary==2.9.9
-pyarrow==16.1.0
+pyarrow==17.0.0
 openpyxl==3.1.2
 pytest==8.2.1
