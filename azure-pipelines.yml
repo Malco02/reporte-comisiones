@@ -1,0 +1,132 @@
+# azure-pipelines.yml
+# Pipeline de CI/CD del proyecto DataOps - Cálculo de comisiones de empleados.
+#
+# Requisitos previos en Azure DevOps (configurar antes de correr el pipeline):
+#   1. Un Variable Group llamado "dataops-dev"  con las variables secretas:
+#      DB_HOST, DB_PORT, DB_NAME, DB_USER, DB_PASSWORD  (marcar DB_PASSWORD como "secret")
+#   2. Un Variable Group llamado "dataops-prod" con las mismas variables apuntando
+#      al entorno de producción (puede ser la misma BD para efectos del ejercicio).
+#   3. Dos Environments en Azure DevOps: "dev" y "production".
+#      En "production" agregar un "Approval" (aprobación manual) para simular
+#      el control de despliegue a producción.
+#
+# Repo -> Project settings -> Pipelines -> Library (Variable groups)
+# Repo -> Pipelines -> Environments
+
+trigger:
+  branches:
+    include:
+      - main
+
+pool:
+  vmImage: "ubuntu-latest"
+
+stages:
+  # ---------------------------------------------------------------------
+  # STAGE 1 - CI: instala dependencias, corre tests y valida el pipeline
+  # ---------------------------------------------------------------------
+  - stage: CI
+    displayName: "CI - Build & Test"
+    jobs:
+      - job: BuildAndTest
+        displayName: "Instalar dependencias y correr tests"
+        steps:
+          - task: UsePythonVersion@0
+            inputs:
+              versionSpec: "3.11"
+            displayName: "Configurar Python 3.11"
+
+          - script: |
+              python -m pip install --upgrade pip
+              pip install -r requirements.txt
+            displayName: "Instalar dependencias"
+
+          - script: |
+              python -m pytest tests/ -v --junitxml=test-results.xml
+            displayName: "Ejecutar tests unitarios"
+
+          - task: PublishTestResults@2
+            condition: succeededOrFailed()
+            inputs:
+              testResultsFiles: "test-results.xml"
+              testRunTitle: "Tests ETL comisiones"
+
+          - publish: $(System.DefaultWorkingDirectory)
+            artifact: source-code
+            displayName: "Publicar código como artefacto"
+
+  # ---------------------------------------------------------------------
+  # STAGE 2 - CD Dev: ejecuta el pipeline real contra el entorno de desarrollo
+  # ---------------------------------------------------------------------
+  - stage: CD_Dev
+    displayName: "CD - Deploy & Run (Dev)"
+    dependsOn: CI
+    condition: succeeded()
+    variables:
+      - group: dataops-dev
+    jobs:
+      - deployment: DeployDev
+        displayName: "Desplegar y ejecutar en Dev"
+        environment: "dev"
+        strategy:
+          runOnce:
+            deploy:
+              steps:
+                - task: UsePythonVersion@0
+                  inputs:
+                    versionSpec: "3.11"
+
+                - script: |
+                    python -m pip install --upgrade pip
+                    pip install -r $(Pipeline.Workspace)/source-code/requirements.txt
+                  displayName: "Instalar dependencias"
+
+                - script: |
+                    python $(Pipeline.Workspace)/source-code/src/etl.py \
+                      --csv $(Pipeline.Workspace)/source-code/data/ComisionEmpleados_V1_202608.csv \
+                      --out $(Pipeline.Workspace)/output/dev/salario_total.parquet
+                  displayName: "Ejecutar ETL en entorno Dev"
+                  env:
+                    DB_HOST: $(DB_HOST)
+                    DB_PORT: $(DB_PORT)
+                    DB_NAME: $(DB_NAME)
+                    DB_USER: $(DB_USER)
+                    DB_PASSWORD: $(DB_PASSWORD)
+
+  # ---------------------------------------------------------------------
+  # STAGE 3 - CD Prod: requiere aprobación manual configurada en el Environment
+  # ---------------------------------------------------------------------
+  - stage: CD_Prod
+    displayName: "CD - Deploy & Run (Production)"
+    dependsOn: CD_Dev
+    condition: succeeded()
+    variables:
+      - group: dataops-prod
+    jobs:
+      - deployment: DeployProd
+        displayName: "Desplegar y ejecutar en Producción"
+        environment: "production"
+        strategy:
+          runOnce:
+            deploy:
+              steps:
+                - task: UsePythonVersion@0
+                  inputs:
+                    versionSpec: "3.11"
+
+                - script: |
+                    python -m pip install --upgrade pip
+                    pip install -r $(Pipeline.Workspace)/source-code/requirements.txt
+                  displayName: "Instalar dependencias"
+
+                - script: |
+                    python $(Pipeline.Workspace)/source-code/src/etl.py \
+                      --csv $(Pipeline.Workspace)/source-code/data/ComisionEmpleados_V1_202608.csv \
+                      --out $(Pipeline.Workspace)/output/prod/salario_total.parquet
+                  displayName: "Ejecutar ETL en entorno Producción"
+                  env:
+                    DB_HOST: $(DB_HOST)
+                    DB_PORT: $(DB_PORT)
+                    DB_NAME: $(DB_NAME)
+                    DB_USER: $(DB_USER)
+                    DB_PASSWORD: $(DB_PASSWORD)
